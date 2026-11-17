@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=240, initial-scale=1.0, user-scalable=no">
+<title>Kids Quiz</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#120d1f;--fg:#fff;--dim:rgba(255,255,255,.5);--line:rgba(255,255,255,.14);--accent:#FDE047;--ok:#86EFAC;--no:#FCA5A5}
+html,body{width:240px;height:282px;overflow:hidden;background:var(--bg);color:var(--fg);font-family:-apple-system,Roboto,sans-serif}
+#top{height:28px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;border-bottom:1px solid var(--line);font-size:11px;color:var(--dim)}
+#top b{color:var(--accent);letter-spacing:.06em}
+#stars{color:var(--accent);font-size:13px}
+#main{height:228px;padding:10px 12px;display:flex;flex-direction:column}
+#hint{height:26px;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--dim);border-top:1px solid var(--line)}
+.topics{display:flex;flex-direction:column;gap:5px;margin-top:4px}
+.topic{padding:7px 10px;border-radius:8px;font-size:14px;border:1px solid var(--line)}
+.topic.sel{border-color:var(--accent);background:rgba(253,224,71,.12)}
+.lang{display:flex;gap:6px;margin-top:8px;justify-content:center}.lang span{font-size:11px;padding:3px 8px;border-radius:10px;border:1px solid var(--line);color:var(--dim)}.lang span.on{border-color:var(--accent);color:var(--accent)}
+#q{font-size:17px;line-height:1.35;font-weight:600;flex:1;display:flex;align-items:center}
+#said{font-size:12px;color:var(--dim);min-height:18px}
+#fb{font-size:14px;line-height:1.35;min-height:40px;margin-top:4px}
+#fb.ok{color:var(--ok)}#fb.no{color:var(--no)}
+#listen{position:absolute;inset:0;background:rgba(18,13,31,.93);display:none;align-items:center;justify-content:center;flex-direction:column;gap:10px;font-size:15px}
+#listen.on{display:flex}#listen i{width:22px;height:22px;border-radius:50%;background:var(--accent);animation:p 1s infinite}
+@keyframes p{50%{opacity:.3;transform:scale(.6)}}
+</style>
+</head>
+<body>
+<div id="top"><b>KIDS QUIZ</b><span id="stars">★ 0</span></div>
+<div id="main"></div>
+<div id="hint"></div>
+<div id="listen"><i></i><span>I'm listening…</span></div>
+
+<script>
+// Kids Quiz: the R1's assistant asks a question out loud, the child answers by voice
+// (hold the side button), the assistant checks it kindly, the wheel moves on.
+// Stars are kept on the device. Nothing else is stored.
+var TOPICS = ['Animals', 'Numbers', 'Space', 'Colours & shapes', 'Words', 'Our body', 'Mix of everything'];
+var LANGS = [{k: 'en', n: 'English'}, {k: 'ru', n: 'Русский'}];
+var $ = function (id) { return document.getElementById(id); };
+function load(k, d) { try { var v = JSON.parse(localStorage.getItem(k)); return v == null ? d : v; } catch (e) { return d; } }
+function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]; }); }
+
+var st = {screen: 'menu', topic: 0, lang: load('kq_lang', 0), age: load('kq_age', 7), stars: load('kq_stars', 0), q: null, said: '', fb: '', fbOk: null, busy: false, asked: []};
+var R1 = typeof PluginMessageHandler !== 'undefined';
+
+// ---------- talking to the R1 assistant ----------
+var waiting = null, waitTimer = null;
+function ask(prompt, cb) {                       // JSON answer back via onPluginMessage
+  if (!R1) { setTimeout(function () { cb(null); }, 300); return; }
+  waiting = cb; clearTimeout(waitTimer);
+  waitTimer = setTimeout(function () { if (waiting) { var w = waiting; waiting = null; w(null); } }, 20000);
+  PluginMessageHandler.postMessage(JSON.stringify({message: prompt, useLLM: true}));
+}
+function say(text) {
+  if (!R1) { console.log('SAY:', text); return; }
+  PluginMessageHandler.postMessage(JSON.stringify({message: 'Say exactly this, nothing else: ' + text, useLLM: true, wantsR1Response: true}));
+}
+function parse(data) {
+  var raw = data && (data.data || data.message); if (!raw) return null;
+  if (typeof raw === 'object') return raw;
+  var m = String(raw).match(/\{[\s\S]*\}/); if (!m) return null;
+  try { return JSON.parse(m[0]); } catch (e) { return null; }
+}
+window.onPluginMessage = function (data) {
+  if (data && data.type === 'sttEnded') { listening = false; $('listen').classList.remove('on'); answered((data.transcript || '').trim()); return; }
+  if (waiting) { var w = waiting; waiting = null; clearTimeout(waitTimer); w(parse(data)); }
+};
+
+// ---------- offline questions (used when the assistant is not reachable) ----------
+var BANK = {
+  en: [['How many legs does a spider have?', 'eight'], ['What colour do you get when you mix blue and yellow?', 'green'], ['What is 5 plus 4?', 'nine'],
+       ['Which planet do we live on?', 'earth'], ['What animal says moo?', 'cow'], ['How many sides does a triangle have?', 'three'], ['What do bees make?', 'honey']],
+  ru: [['Сколько ног у паука?', 'восемь'], ['Какой цвет получится, если смешать синий и жёлтый?', 'зелёный'], ['Сколько будет пять плюс четыре?', 'девять'],
+       ['На какой планете мы живём?', 'земля'], ['Какое животное говорит «му»?', 'корова'], ['Сколько сторон у треугольника?', 'три'], ['Что делают пчёлы?', 'мёд']]
+};
+
+// ---------- screens ----------
+function render() {
+  $('stars').textContent = '★ ' + st.stars;
+  if (st.screen === 'menu') {
+    $('main').innerHTML = '<div style="font-size:12px;color:var(--dim)">Pick a topic · age ' + st.age + '</div><div class="topics">' +
+      TOPICS.map(function (t, i) { return '<div class="topic' + (i === st.topic ? ' sel' : '') + '" data-i="' + i + '">' + t + '</div>'; }).slice(Math.max(0, st.topic - 3), Math.max(0, st.topic - 3) + 4).join('') +
+      '</div><div class="lang">' + LANGS.map(function (l, i) { return '<span data-l="' + i + '" class="' + (i === st.lang ? 'on' : '') + '">' + l.n + '</span>'; }).join('') + '</div>';
+    $('hint').textContent = 'wheel = topic · tap = language · button = start';
+  } else {
+    $('main').innerHTML = '<div id="q">' + esc(st.busy && !st.q ? 'Thinking of a question…' : st.q ? st.q.q : '') + '</div><div id="said">' + (st.said ? '“' + esc(st.said) + '”' : '') + '</div><div id="fb" class="' + (st.fbOk === true ? 'ok' : st.fbOk === false ? 'no' : '') + '">' + esc(st.fb) + '</div>';
+    $('hint').textContent = st.fbOk === null ? 'hold = answer · wheel = skip' : 'wheel = next question · button = topics';
+  }
+}
+$('main').addEventListener('click', function (e) {
+  var l = e.target.closest('[data-l]'); if (l) { st.lang = +l.dataset.l; save('kq_lang', st.lang); render(); return; }
+  var t = e.target.closest('.topic'); if (t) { st.topic = +t.dataset.i; start(); }
+});
+
+function start() { st.screen = 'play'; st.asked = []; next(); }
+function next() {
+  st.q = null; st.said = ''; st.fb = ''; st.fbOk = null; st.busy = true; render();
+  var lang = LANGS[st.lang].n, topic = TOPICS[st.topic];
+  ask('You are a kind quiz host for a ' + st.age + '-year-old child. Write ONE short, fun quiz question about "' + topic + '" in ' + lang +
+      ', with one clear short answer a child can say out loud. Do not repeat: ' + JSON.stringify(st.asked.slice(-8)) +
+      '. Reply ONLY with JSON: {"q":"the question","a":"the answer"}', function (j) {
+    if (!j || !j.q) { var bank = BANK[LANGS[st.lang].k], b = bank[Math.floor(Math.random() * bank.length)]; j = {q: b[0], a: b[1]}; }
+    st.q = j; st.asked.push(j.q); st.busy = false; render(); say(j.q);
+  });
+}
+function answered(text) {
+  if (st.screen !== 'play' || !st.q || st.fbOk !== null) return;
+  if (!text) { st.fb = 'I didn\'t hear you. Hold the button and try again.'; render(); return; }
+  st.said = text; st.fb = 'Checking…'; render();
+  var easy = text.toLowerCase().indexOf(String(st.q.a).toLowerCase()) >= 0;
+  ask('A ' + st.age + '-year-old was asked: "' + st.q.q + '". Correct answer: "' + st.q.a + '". The child said: "' + text +
+      '". Be generous with spelling and speech-recognition mistakes. Reply ONLY with JSON in ' + LANGS[st.lang].n +
+      ': {"correct":true or false,"say":"one short warm sentence; if wrong, gently give the right answer"}', function (j) {
+    var ok = j ? !!j.correct : easy;
+    var line = (j && j.say) || (ok ? (st.lang ? 'Правильно! Молодец!' : 'Correct! Well done!') : (st.lang ? 'Почти! Ответ: ' : 'Nice try! The answer is ') + st.q.a + '.');
+    st.fbOk = ok; st.fb = line; if (ok) { st.stars++; save('kq_stars', st.stars); }
+    render(); say(line);
+  });
+}
+
+// ---------- hardware ----------
+var listening = false;
+window.addEventListener('longPressStart', function () {
+  if (listening || st.screen !== 'play' || !st.q || st.fbOk !== null) return;
+  listening = true; $('listen').classList.add('on');
+  if (typeof CreationVoiceHandler !== 'undefined') CreationVoiceHandler.postMessage('start');
+  else setTimeout(function () { window.onPluginMessage({type: 'sttEnded', transcript: prompt('Answer (test):') || ''}); }, 10);
+});
+window.addEventListener('longPressEnd', function () { if (listening && typeof CreationVoiceHandler !== 'undefined') CreationVoiceHandler.postMessage('stop'); });
+var clickT = null;
+window.addEventListener('sideClick', function () {
+  if (clickT) return;
+  clickT = setTimeout(function () { clickT = null; if (st.screen === 'menu') start(); else { st.screen = 'menu'; render(); } }, 120);
+});
+function wheel(d) {
+  if (st.screen === 'menu') { st.topic = (st.topic + d + TOPICS.length) % TOPICS.length; render(); }
+  else if (d > 0 && !st.busy) next();   // answered or not: down = next question
+}
+window.addEventListener('scrollUp', function () { wheel(-1); });
+window.addEventListener('scrollDown', function () { wheel(1); });
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') window.dispatchEvent(new Event('sideClick'));
+  if (e.key === 'ArrowUp') window.dispatchEvent(new Event('scrollUp'));
+  if (e.key === 'ArrowDown') window.dispatchEvent(new Event('scrollDown'));
+  if (e.key === ' ' && !e.repeat) window.dispatchEvent(new Event('longPressStart'));
+});
+document.addEventListener('keyup', function (e) { if (e.key === ' ') window.dispatchEvent(new Event('longPressEnd')); });
+render();
+if (location.hash === '#play') start();   // testing
+</script>
+</body>
+</html>
